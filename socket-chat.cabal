@@ -1,6 +1,6 @@
-Name:                example
+Name:                socket-chat
 Version:             0.1
-Synopsis:            Project to demonstrate the use of snaplet-sqlite-simple
+Synopsis:            Real-time web chat using Socket.IO + Snap
 License:             AllRightsReserved
 Author:              Janne Hellsten
 Maintainer:          Janne Hellsten <jjhellst@gmail.com>
@@ -13,7 +13,7 @@ Flag development
   Description: Whether to build the server in development (interpreted) mode
   Default: False
 
-Executable example
+Executable socket-chat
   hs-source-dirs: src
   main-is: Main.hs
 
