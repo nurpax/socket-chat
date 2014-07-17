@@ -1,4 +1,4 @@
-{-# LANGUAGE OverloadedStrings, ScopedTypeVariables #-}
+{-# LANGUAGE OverloadedStrings, ScopedTypeVariables, FlexibleContexts #-}
 
 ------------------------------------------------------------------------------
 -- | This module is where all the routes and handlers are defined for your
@@ -10,15 +10,23 @@ module Site
 
 ------------------------------------------------------------------------------
 import           Control.Concurrent
+import qualified Control.Concurrent.STM as STM
 import           Control.Applicative
 import           Control.Monad.Trans (liftIO, lift)
+import           Control.Monad.Trans.State
 import           Control.Monad.Trans.Either
 import           Control.Error.Safe (tryJust)
-import           Control.Lens
+import           Control.Lens hiding ((.=))
+import           Data.Aeson
 import           Data.ByteString (ByteString)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as T
 import qualified Data.Text.Read as T
+
+import qualified Network.EngineIO.Snap as EIOSnap
+import qualified Network.SocketIO as SocketIO
+import qualified Snap.CORS as CORS
+
 import           Snap.Core
 import           Snap.Snaplet
 import           Snap.Snaplet.Auth
@@ -120,6 +128,83 @@ mainPage = withLoggedInUser go
     splices cs =
       I.bindSplices ("comments" ## I.mapSplices renderComment cs)
 
+------------------------------------------------------------
+
+--------------------------------------------------------------------------------
+data AddUser = AddUser T.Text
+
+instance FromJSON AddUser where
+  parseJSON = withText "AddUser" $ pure . AddUser
+
+
+data NumConnected = NumConnected !Int
+
+instance ToJSON NumConnected where
+  toJSON (NumConnected n) = object [ "numUsers" .= n]
+
+
+data NewMessage = NewMessage T.Text
+
+instance FromJSON NewMessage where
+  parseJSON = withText "NewMessage" $ pure . NewMessage
+
+
+data Said = Said T.Text T.Text
+
+instance ToJSON Said where
+  toJSON (Said username message) = object
+    [ "username" .= username
+    , "message" .= message
+    ]
+
+data UserName = UserName T.Text
+
+instance ToJSON UserName where
+  toJSON (UserName un) = object [ "username" .= un ]
+
+
+data UserJoined = UserJoined T.Text Int
+
+instance ToJSON UserJoined where
+  toJSON (UserJoined un n) = object
+    [ "username" .= un
+    , "numUsers" .= n
+    ]
+
+data ServerState = ServerState { ssNConnected :: STM.TVar Int }
+
+server :: ServerState -> StateT SocketIO.RoutingTable IO ()
+server state = do
+  userNameMVar <- liftIO STM.newEmptyTMVarIO
+  let forUserName m = do
+        u <- liftIO (STM.atomically (STM.readTMVar userNameMVar))
+        m u -- mapM_ m u
+        return ()
+
+  SocketIO.on "new message" $ \(NewMessage message) ->
+    forUserName $ \userName ->
+      SocketIO.broadcast "new message" (Said userName message)
+
+  SocketIO.on "add user" $ \(AddUser userName) -> do
+    n <- liftIO $ STM.atomically $ do
+      n <- (+ 1) <$> STM.readTVar (ssNConnected state)
+      STM.putTMVar userNameMVar userName
+      STM.writeTVar (ssNConnected state) n
+      return n
+
+    SocketIO.emit "login" (NumConnected n)
+    SocketIO.broadcast "user joined" (UserJoined userName n)
+
+  SocketIO.on_ "typing" $
+    forUserName $ \userName ->
+      SocketIO.broadcast "typing" (UserName userName)
+
+  SocketIO.on_ "stop typing" $
+    forUserName $ \userName ->
+      SocketIO.broadcast "stop typing" (UserName userName)
+
+
+
 -- | The application's routes.
 routes :: [(ByteString, Handler App App ())]
 routes = [ ("/login",        handleLoginSubmit)
@@ -133,23 +218,26 @@ routes = [ ("/login",        handleLoginSubmit)
 -- | The application initializer.
 app :: SnapletInit App App
 app = makeSnaplet "app" "An snaplet example application." Nothing $ do
-    -- addRoutes must be called before heistInit - heist wants to
-    -- serve "" itself which means our mainPage handler never gets a
-    -- chance to get called.
-    addRoutes routes
-    h <- nestSnaplet "" heist $ heistInit "templates"
-    s <- nestSnaplet "sess" sess $
-           initCookieSessionManager "site_key.txt" "sess" (Just 3600)
+  -- addRoutes must be called before heistInit - heist wants to
+  -- serve "" itself which means our mainPage handler never gets a
+  -- chance to get called.
+  state <- liftIO $ ServerState <$> STM.newTVarIO 0
+  xx <- liftIO $ SocketIO.initialize EIOSnap.snapAPI (return $ server state)
+  addRoutes [("/socket.io", xx)]
+  addRoutes routes
+  h <- nestSnaplet "" heist $ heistInit "templates"
+  s <- nestSnaplet "sess" sess $
+         initCookieSessionManager "site_key.txt" "sess" (Just 3600)
 
-    -- Initialize auth that's backed by an sqlite database
-    d <- nestSnaplet "db" db sqliteInit
-    a <- nestSnaplet "auth" auth $ initSqliteAuth sess d
+  -- Initialize auth that's backed by an sqlite database
+  d <- nestSnaplet "db" db sqliteInit
+  a <- nestSnaplet "auth" auth $ initSqliteAuth sess d
 
-    -- Grab the DB connection pool from the sqlite snaplet and call
-    -- into the Model to create all the DB tables if necessary.
-    let c = sqliteConn $ d ^# snapletValue
-    liftIO $ withMVar c $ \conn -> Db.createTables conn
+  -- Grab the DB connection pool from the sqlite snaplet and call
+  -- into the Model to create all the DB tables if necessary.
+  let c = sqliteConn $ d ^# snapletValue
+  liftIO $ withMVar c $ \conn -> Db.createTables conn
 
-    addAuthSplices h auth
-    return $ App h s d a
+  addAuthSplices h auth
+  return $ App h s d a
 
