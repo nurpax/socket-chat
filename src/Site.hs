@@ -9,15 +9,17 @@ module Site
   ) where
 
 ------------------------------------------------------------------------------
+import           Prelude hiding (mapM_)
 import           Control.Concurrent
 import qualified Control.Concurrent.STM as STM
 import           Control.Applicative
 import           Control.Monad.Trans (liftIO, lift)
-import           Control.Monad.Trans.State
+import           Control.Monad.Trans.State hiding (state)
 import           Control.Monad.Trans.Either
 import           Control.Error.Safe (tryJust)
-import           Control.Lens hiding ((.=))
+import           Control.Lens hiding ((.=), un)
 import           Data.Aeson
+import           Data.Foldable (mapM_)
 import           Data.ByteString (ByteString)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as T
@@ -177,9 +179,8 @@ server :: ServerState -> StateT SocketIO.RoutingTable IO ()
 server state = do
   userNameMVar <- liftIO STM.newEmptyTMVarIO
   let forUserName m = do
-        u <- liftIO (STM.atomically (STM.readTMVar userNameMVar))
-        m u -- mapM_ m u
-        return ()
+        u <- liftIO (STM.atomically (STM.tryReadTMVar userNameMVar))
+        mapM_ m u
 
   SocketIO.on "new message" $ \(NewMessage message) ->
     forUserName $ \userName ->
@@ -212,6 +213,7 @@ routes = [ ("/login",        handleLoginSubmit)
          , ("/new_user",     handleNewUser)
          , ("/save_comment", handleCommentSubmit)
          , ("/",             mainPage)
+         , ("/chat.html",    serveFile "static/chat.html")
          , ("/static",       serveDirectory "static")
          ]
 
@@ -223,7 +225,7 @@ app = makeSnaplet "app" "An snaplet example application." Nothing $ do
   -- chance to get called.
   state <- liftIO $ ServerState <$> STM.newTVarIO 0
   xx <- liftIO $ SocketIO.initialize EIOSnap.snapAPI (return $ server state)
-  addRoutes [("/socket.io", xx)]
+  addRoutes [("/socket.io", CORS.applyCORS CORS.defaultOptions xx)]
   addRoutes routes
   h <- nestSnaplet "" heist $ heistInit "templates"
   s <- nestSnaplet "sess" sess $
