@@ -177,16 +177,19 @@ data ServerState = ServerState { ssNConnected :: STM.TVar Int }
 
 server :: ServerState -> StateT SocketIO.RoutingTable IO ()
 server state = do
+  liftIO $ putStrLn "*** SERVER IO ***"
   userNameMVar <- liftIO STM.newEmptyTMVarIO
   let forUserName m = do
         u <- liftIO (STM.atomically (STM.tryReadTMVar userNameMVar))
         mapM_ m u
 
-  SocketIO.on "new message" $ \(NewMessage message) ->
+  SocketIO.on "new message" $ \(NewMessage message) -> do
+    liftIO $ putStrLn "*** SERVER IO ***"
     forUserName $ \userName ->
       SocketIO.broadcast "new message" (Said userName message)
 
   SocketIO.on "add user" $ \(AddUser userName) -> do
+    liftIO $ putStrLn "*** SERVER IO ***"
     n <- liftIO $ STM.atomically $ do
       n <- (+ 1) <$> STM.readTVar (ssNConnected state)
       STM.putTMVar userNameMVar userName
@@ -196,11 +199,13 @@ server state = do
     SocketIO.emit "login" (NumConnected n)
     SocketIO.broadcast "user joined" (UserJoined userName n)
 
-  SocketIO.on_ "typing" $
+  SocketIO.on_ "typing" $ do
+    liftIO $ putStrLn "*** SERVER IO ***"
     forUserName $ \userName ->
       SocketIO.broadcast "typing" (UserName userName)
 
-  SocketIO.on_ "stop typing" $
+  SocketIO.on_ "stop typing" $ do
+    liftIO $ putStrLn "*** SERVER IO ***"
     forUserName $ \userName ->
       SocketIO.broadcast "stop typing" (UserName userName)
 
@@ -212,7 +217,7 @@ routes = [ ("/login",        handleLoginSubmit)
          , ("/logout",       handleLogout)
          , ("/new_user",     handleNewUser)
          , ("/save_comment", handleCommentSubmit)
-         , ("/",             mainPage)
+--         , ("/",             mainPage)
          , ("/chat.html",    serveFile "static/chat.html")
          , ("/static",       serveDirectory "static")
          ]
@@ -223,9 +228,10 @@ app = makeSnaplet "app" "An snaplet example application." Nothing $ do
   -- addRoutes must be called before heistInit - heist wants to
   -- serve "" itself which means our mainPage handler never gets a
   -- chance to get called.
+  liftIO $ putStrLn "*** INIT SERVER IO ***"
   state <- liftIO $ ServerState <$> STM.newTVarIO 0
   xx <- liftIO $ SocketIO.initialize EIOSnap.snapAPI (return $ server state)
-  addRoutes [("/socket.io", CORS.applyCORS CORS.defaultOptions xx)]
+  addRoutes [("/socket.io/", CORS.applyCORS CORS.defaultOptions xx)]
   addRoutes routes
   h <- nestSnaplet "" heist $ heistInit "templates"
   s <- nestSnaplet "sess" sess $

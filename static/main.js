@@ -587,6 +587,8 @@ $(function() {
     var message = $inputMessage.val();
     // Prevent markup from being injected into the message
     message = cleanInput(message);
+    console.log(message);
+    console.log(connected);
     // if there is a non-empty message and a socket connection
     if (message && connected) {
       $inputMessage.val('');
