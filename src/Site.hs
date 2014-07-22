@@ -13,8 +13,7 @@ import           Prelude hiding (mapM_)
 import           Control.Concurrent
 import qualified Control.Concurrent.STM as STM
 import           Control.Applicative
-import           Control.Monad.Trans (liftIO, lift)
-import           Control.Monad.Trans.State hiding (state)
+import           Control.Monad.State hiding (mapM_, state)
 import           Control.Monad.Trans.Either
 import           Control.Error.Safe (tryJust)
 import           Control.Lens hiding ((.=), un)
@@ -175,21 +174,20 @@ instance ToJSON UserJoined where
 
 data ServerState = ServerState { ssNConnected :: STM.TVar Int }
 
-server :: ServerState -> StateT SocketIO.RoutingTable IO ()
+server :: (MonadSnap m, MonadState SocketIO.RoutingTable m)
+          => ServerState
+          -> m ()
 server state = do
-  liftIO $ putStrLn "*** SERVER IO ***"
   userNameMVar <- liftIO STM.newEmptyTMVarIO
   let forUserName m = do
         u <- liftIO (STM.atomically (STM.tryReadTMVar userNameMVar))
         mapM_ m u
 
   SocketIO.on "new message" $ \(NewMessage message) -> do
-    liftIO $ putStrLn "*** SERVER IO ***"
     forUserName $ \userName ->
       SocketIO.broadcast "new message" (Said userName message)
 
   SocketIO.on "add user" $ \(AddUser userName) -> do
-    liftIO $ putStrLn "*** SERVER IO ***"
     n <- liftIO $ STM.atomically $ do
       n <- (+ 1) <$> STM.readTVar (ssNConnected state)
       STM.putTMVar userNameMVar userName
@@ -200,12 +198,10 @@ server state = do
     SocketIO.broadcast "user joined" (UserJoined userName n)
 
   SocketIO.on_ "typing" $ do
-    liftIO $ putStrLn "*** SERVER IO ***"
     forUserName $ \userName ->
       SocketIO.broadcast "typing" (UserName userName)
 
   SocketIO.on_ "stop typing" $ do
-    liftIO $ putStrLn "*** SERVER IO ***"
     forUserName $ \userName ->
       SocketIO.broadcast "stop typing" (UserName userName)
 
@@ -228,9 +224,8 @@ app = makeSnaplet "app" "An snaplet example application." Nothing $ do
   -- addRoutes must be called before heistInit - heist wants to
   -- serve "" itself which means our mainPage handler never gets a
   -- chance to get called.
-  liftIO $ putStrLn "*** INIT SERVER IO ***"
   state <- liftIO $ ServerState <$> STM.newTVarIO 0
-  xx <- liftIO $ SocketIO.initialize EIOSnap.snapAPI (return $ server state)
+  xx <- liftIO $ SocketIO.initialize EIOSnap.snapAPI (server state)
   addRoutes [("/socket.io/", CORS.applyCORS CORS.defaultOptions xx)]
   addRoutes routes
   h <- nestSnaplet "" heist $ heistInit "templates"
