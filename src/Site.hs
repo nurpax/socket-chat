@@ -13,7 +13,8 @@ import           Prelude hiding (mapM_)
 import           Control.Concurrent
 import qualified Control.Concurrent.STM as STM
 import           Control.Applicative
-import           Control.Monad.State hiding (mapM_, state)
+import           Control.Monad.State hiding (mapM_, state, StateT)
+import           Control.Monad.Trans.State.Strict (StateT)
 import           Control.Monad.Trans.Either
 import           Control.Error.Safe (tryJust)
 import           Control.Lens hiding ((.=), un)
@@ -174,17 +175,16 @@ instance ToJSON UserJoined where
 
 data ServerState = ServerState { ssNConnected :: STM.TVar Int }
 
-server :: (MonadSnap m, MonadState SocketIO.RoutingTable m)
-          => ServerState
-          -> m ()
+server :: ServerState -> StateT SocketIO.RoutingTable (Handler App App) ()
 server state = do
   userNameMVar <- liftIO STM.newEmptyTMVarIO
+  lift $ withTop db $ Db.saveComment (Db.User 1 "hardcoded") "hardcoded comment"
   let forUserName m = do
         u <- liftIO (STM.atomically (STM.tryReadTMVar userNameMVar))
         mapM_ m u
 
   SocketIO.on "new message" $ \(NewMessage message) -> do
-    forUserName $ \userName ->
+    forUserName $ \userName -> do
       SocketIO.broadcast "new message" (Said userName message)
 
   SocketIO.on "add user" $ \(AddUser userName) -> do
