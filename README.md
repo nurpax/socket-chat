@@ -12,4 +12,4 @@ cabal install --only-dep
 cabal run
 ```
 
-Browse to [http://localhost:8000/chat.html]
+Browse to [http://localhost:8000/chat.html](http://localhost:8000/chat.html)
